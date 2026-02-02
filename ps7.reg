@@ -1,0 +1,44 @@
+Windows Registry Editor Version 5.00
+
+; ---------------------------------------
+; Normal right-click on folder background (empty space)
+; ---------------------------------------
+[HKEY_CLASSES_ROOT\Directory\Background\shell\OpenPowerShell7]
+@="Open PowerShell 7 Here"
+"Icon"="C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+; No Position value → Windows puts it in main section after default items
+
+[HKEY_CLASSES_ROOT\Directory\Background\shell\OpenPowerShell7\command]
+@="\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -noexit -command Set-Location -LiteralPath \"%V\""
+
+; ---------------------------------------
+; Normal right-click on folder itself
+; ---------------------------------------
+[HKEY_CLASSES_ROOT\Directory\shell\OpenPowerShell7]
+@="Open PowerShell 7 Here"
+"Icon"="C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+
+[HKEY_CLASSES_ROOT\Directory\shell\OpenPowerShell7\command]
+@="\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -noexit -command Set-Location -LiteralPath \"%1\""
+
+; ---------------------------------------
+; Shift+Right-Click -> Admin version (folder background)
+; ---------------------------------------
+[HKEY_CLASSES_ROOT\Directory\Background\shell\OpenPowerShell7Admin]
+@="Open PowerShell 7 Here (Admin)"
+"Icon"="C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+"Extended"=""  ; Shift+Right-Click only
+
+[HKEY_CLASSES_ROOT\Directory\Background\shell\OpenPowerShell7Admin\command]
+@="powershell -Command \"Start-Process 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' -ArgumentList '-noexit -command Set-Location -LiteralPath \\\"%V\\\"' -Verb RunAs\""
+
+; ---------------------------------------
+; Shift+Right-Click -> Admin version (folder itself)
+; ---------------------------------------
+[HKEY_CLASSES_ROOT\Directory\shell\OpenPowerShell7Admin]
+@="Open PowerShell 7 Here (Admin)"
+"Icon"="C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+"Extended"=""
+
+[HKEY_CLASSES_ROOT\Directory\shell\OpenPowerShell7Admin\command]
+@="powershell -Command \"Start-Process 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' -ArgumentList '-noexit -command Set-Location \\\"%1\\\"' -Verb RunAs\""
