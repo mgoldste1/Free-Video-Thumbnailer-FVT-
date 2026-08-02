@@ -228,7 +228,7 @@ $videos | ForEach-Object -Parallel {
         # Stack header + montage
         magick $header $montageTemp -append $outGrid
 
-        Write-Host "Created: $outGrid (header pointsize $pointSize)"
+        Write-Host "Created: $outGrid"
 
     } catch {
         $errMsg = $_ | Out-String
