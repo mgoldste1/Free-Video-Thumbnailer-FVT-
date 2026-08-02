@@ -1,0 +1,9 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CLASSES_ROOT\Directory\shell\PS_Thumbnailer]
+@="Generate Thumbnails"
+"Extended"=""
+"Icon"="C:\\video_encoders\\PS_Thumbnailer\\video.ico"
+
+[HKEY_CLASSES_ROOT\Directory\shell\PS_Thumbnailer\command]
+@="\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoLogo -NoProfile -ExecutionPolicy Bypass -File \"C:\\video_encoders\\PS_Thumbnailer\\thumbnails.ps1\" \"%1\""
