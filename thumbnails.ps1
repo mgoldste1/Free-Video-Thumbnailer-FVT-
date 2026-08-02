@@ -2,16 +2,44 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$InputFolder,
 
-    [int]$Concurrency = 16,
+    [int]$Concurrency = 8,
 
     # CONFIG OPTIONS
     [int]$FrameWidth = 480,     # width of each frame
     [int]$GridX = 5,            # frames horizontally
-    [int]$GridY = 7,            # frames vertically
+    [int]$GridY = 10,            # frames vertically
 
     # User-facing JPEG quality (0–100)
-    [int]$Quality = 90
+    [int]$Quality = 76,
+
+    [bool]$MovePics = $true,
+
+    # OUTPUT NAMING
+    # $true  -> 1.mp4.grid.jpg
+    # $false -> 1.mp4.jpg
+    [bool]$UseGridSuffix = $true,
+
+    # HEADER TEXT SCALING
+    [double]$HeaderFontScale = 0.010,    # pointsize as a fraction of the grid's height
+    [int]$HeaderFontMin = 14,            # floor, unless one long unbreakable word forces smaller
+    [double]$HeaderMaxHeightPct = 0.08   # header may not exceed this share of the grid's height
 )
+
+# Move pictures to 'pics' subdirectory if flag is set
+if ($MovePics) {
+    $picExts = @('jpg','jpeg','png','gif','bmp','tiff','tif','webp','heic','avif')
+    $picRegex = ($picExts -join '|')
+    $pics = Get-ChildItem -Path $InputFolder -File | Where-Object { $_.Extension -match "(?i)^\.($picRegex)$" }
+    if ($pics.Count -gt 0) {
+        $picsDir = Join-Path $InputFolder 'pics'
+        if (-not (Test-Path $picsDir)) {
+            New-Item -ItemType Directory -Path $picsDir | Out-Null
+        }
+        foreach ($pic in $pics) {
+            Move-Item -Path $pic.FullName -Destination $picsDir
+        }
+    }
+}
 
 # Map user quality (0–100) to ffmpeg JPEG q:v scale (1–5)
 # 1 = best, 5 = decent, 9+ = trash
@@ -28,9 +56,15 @@ foreach ($tool in @("ffmpeg", "magick", "ffprobe")) {
     }
 }
 
-# Reliable video detection
+# --- Video file extensions supported by ffmpeg (common set) ---
+$videoExts = @(
+    '3g2','3gp','amv','asf','avi','divx','drc','f4v','flv','gxf','m2ts','m2v','m4v','mkv','mov','mp4','mpe','mpeg','mpg','mpv','mts','mxf','nsv','ogg','ogv','qt','rm','rmvb','roq','svi','ts','vob','webm','wmv','yuv'
+)
+$videoRegex = ($videoExts -join '|')
+
+# Reliable video detection (all ffmpeg-supported extensions)
 $videos = Get-ChildItem -Path $InputFolder -File |
-          Where-Object { $_.Extension.ToLower() -match 'mp4|mkv|mov|avi|wmv' }
+    Where-Object { $_.Extension -match "(?i)^\.($videoRegex)$" }
 
 if ($videos.Count -eq 0) {
     throw "No video files found in '$InputFolder'."
@@ -44,11 +78,15 @@ $TotalFrames = $GridX * $GridY
 # Process videos in parallel
 $videos | ForEach-Object -Parallel {
 
-    try {
+    $video = $_
 
-        $video = $_
-        $base = [IO.Path]::GetFileNameWithoutExtension($video.Name)
-        $outGrid = Join-Path $video.Directory "$base-grid.jpg"
+    # Output name: [fullFileNameWithExtension](.grid).jpg
+    $suffix  = if ($using:UseGridSuffix) { '.grid' } else { '' }
+    $outGrid = Join-Path $video.Directory ("$($video.Name)$suffix.jpg")
+
+    $temp = $null
+
+    try {
 
         # Create temp folder
         $temp = Join-Path $env:TEMP ("thumbs_" + [guid]::NewGuid().ToString())
@@ -67,18 +105,17 @@ $videos | ForEach-Object -Parallel {
         $durationFormatted = "{0:00}:{1:00}:{2:00}.{3}" -f `
             $ts.Hours, $ts.Minutes, $ts.Seconds, ([math]::Round($ts.Milliseconds / 100, 0))
 
-        # Two-column metadata
-        $leftCol = @(
-            "File: $($video.Name)"
-            "Size: $([math]::Round($video.Length / 1MB, 2)) MB"
-            "Resolution: $($stream.width)x$($stream.height)"
-        ) -join "`n"
+        # Two-line header: full filename on top, everything else on one line below
+        $headerLine1 = $video.Name
+        $headerLine2 = @(
+            "$($stream.width)x$($stream.height)"
+            "$($stream.codec_name)"
+            "$([math]::Round($format.bit_rate / 1000)) kbps"
+            "$([math]::Round($video.Length / 1MB, 2)) MB"
+            "$durationFormatted"
+        ) -join "  |  "
 
-        $rightCol = @(
-            "Codec: $($stream.codec_name)"
-            "Bitrate: $([math]::Round($format.bit_rate / 1000)) kbps"
-            "Duration: $durationFormatted"
-        ) -join "`n"
+        $headerText = "$headerLine1`n$headerLine2"
 
         # Extract evenly spaced frames
         $duration = [double]$format.duration
@@ -133,31 +170,74 @@ $videos | ForEach-Object -Parallel {
             -tile $tile -geometry +2+2 `
             $montageTemp
 
-        # Read montage width dynamically
-        $montageWidth = [int](magick identify -format "%w" $montageTemp)
+        # Read montage dimensions dynamically
+        $montageDims   = (magick identify -format "%w %h" $montageTemp) -split '\s+'
+        $montageWidth  = [int]$montageDims[0]
+        $montageHeight = [int]$montageDims[1]
 
-        # Right column alignment
-        $rightX = $montageWidth - 10 - 300
+        # --- Header sizing ------------------------------------------------
+        # Font tracks the sheet's HEIGHT, so text stays readable once the whole
+        # sheet is zoomed down to fit a screen. Lines too wide for the sheet are
+        # wrapped by ImageMagick's caption:, so width no longer caps the font --
+        # except for a single unbreakable word (a long filename), which can't wrap.
 
-        # Create compact header
+        # caption:/label: expand % escapes, so double up any percent in the text
+        $headerEscaped = $headerText.Replace('%', '%%')
+
+        $pointSize = [int][math]::Round($montageHeight * $using:HeaderFontScale)
+        if ($pointSize -lt $using:HeaderFontMin) { $pointSize = $using:HeaderFontMin }
+
+        # Cap by the longest unbreakable word, measured for real at a reference size
+        $longestWord = $headerEscaped -split '\s+' |
+            Sort-Object { $_.Length } -Descending | Select-Object -First 1
+
+        if ($longestWord) {
+            $refSize  = 100
+            $refWidth = [int](magick -pointsize $refSize label:"$longestWord" -format "%w" info:)
+            if ($refWidth -gt 0) {
+                # needed width = pointSize * (refWidth/refSize), plus 0.6*pointSize padding each side
+                $maxByWord = [int][math]::Floor($montageWidth / (($refWidth / $refSize) + 1.2))
+                if ($maxByWord -lt 6) { $maxByWord = 6 }
+                if ($pointSize -gt $maxByWord) { $pointSize = $maxByWord }
+            }
+        }
+
+        # Render, shrinking if wrapping makes the header eat too much of the sheet
+        $maxHeaderHeight = [int]($montageHeight * $using:HeaderMaxHeightPct)
         $header = Join-Path $temp "header.jpg"
 
-        magick -size ${montageWidth}x60 canvas:none `
-            -fill "rgba(0,0,0,0.65)" -draw "rectangle 0,0,$montageWidth,60" `
-            -gravity northwest -fill white -pointsize 14 `
-            -annotate +10+10 "$leftCol" `
-            -annotate +${rightX}+10 "$rightCol" `
-            $header
+        for ($attempt = 0; $attempt -lt 12; $attempt++) {
+
+            $pad       = [int][math]::Ceiling($pointSize * 0.6)
+            $textWidth = $montageWidth - (2 * $pad)
+
+            magick -background black -fill white -pointsize $pointSize `
+                -size "${textWidth}x" caption:"$headerEscaped" `
+                -bordercolor black -border ${pad}x${pad} `
+                $header
+
+            $headerHeight = [int](magick identify -format "%h" $header)
+
+            if ($headerHeight -le $maxHeaderHeight -or $pointSize -le $using:HeaderFontMin) { break }
+
+            $next = [int][math]::Floor($pointSize * 0.85)
+            if ($next -lt $using:HeaderFontMin) { $next = $using:HeaderFontMin }
+            $pointSize = $next
+        }
 
         # Stack header + montage
         magick $header $montageTemp -append $outGrid
 
-        Write-Host "Created: $outGrid"
+        Write-Host "Created: $outGrid (header pointsize $pointSize)"
 
-    }
-    finally {
+    } catch {
+        $errMsg = $_ | Out-String
+        Write-Host $errMsg -ForegroundColor Red
+        $errorFile = [System.IO.Path]::ChangeExtension($outGrid, 'txt')
+        $errMsg | Set-Content -Encoding UTF8 $errorFile
+    } finally {
         # CLEANUP TEMP DIRECTORY
-        if (Test-Path $temp) {
+        if ($temp -and (Test-Path $temp)) {
             Remove-Item -Recurse -Force $temp
         }
     }
